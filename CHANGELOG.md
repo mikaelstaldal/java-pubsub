@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.109.0](https://www.github.com/googleapis/java-pubsub/compare/v1.108.7...v1.109.0) (2020-11-13)
+
+
+### Features
+
+* Enable server side flow control by default with the option to turn it off ([#426](https://www.github.com/googleapis/java-pubsub/issues/426)) ([14ac8d7](https://www.github.com/googleapis/java-pubsub/commit/14ac8d7e10ef6fbecdb21cb80ef496686d20e8f3))
+
 ### [1.108.7](https://www.github.com/googleapis/java-pubsub/compare/v1.108.6...v1.108.7) (2020-11-02)
 
 

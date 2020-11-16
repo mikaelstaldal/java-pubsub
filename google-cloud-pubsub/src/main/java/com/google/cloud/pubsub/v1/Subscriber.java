@@ -120,12 +120,14 @@ public class Subscriber extends AbstractApiService implements SubscriberInterfac
   private final int numPullers;
 
   private final MessageReceiver receiver;
+  private final BatchedMessageReceiver batchedReceiver;
   private final List<StreamingSubscriberConnection> streamingSubscriberConnections;
   private final ApiClock clock;
   private final List<BackgroundResource> backgroundResources = new ArrayList<>();
 
   private Subscriber(Builder builder) {
     receiver = builder.receiver;
+    batchedReceiver = builder.batchedReceiver;
     flowControlSettings = builder.flowControlSettings;
     useLegacyFlowControl = builder.useLegacyFlowControl;
     subscriptionName = builder.subscriptionName;
@@ -208,6 +210,29 @@ public class Subscriber extends AbstractApiService implements SubscriberInterfac
    */
   public static Builder newBuilder(String subscription, MessageReceiver receiver) {
     return new Builder(subscription, receiver);
+  }
+
+  /**
+   * Constructs a new {@link Builder}.
+   *
+   * @param subscription Cloud Pub/Sub subscription to bind the subscriber to
+   * @param batchedReceiver an implementation of {@link BatchedMessageReceiver} used to process the
+   *     received messages
+   */
+  public static Builder newBuilder(
+      ProjectSubscriptionName subscription, BatchedMessageReceiver batchedReceiver) {
+    return newBuilder(subscription.toString(), batchedReceiver);
+  }
+
+  /**
+   * Constructs a new {@link Builder}.
+   *
+   * @param subscription Cloud Pub/Sub subscription to bind the subscriber to
+   * @param batchedReceiver an implementation of {@link BatchedMessageReceiver} used to process the
+   *     received messages
+   */
+  public static Builder newBuilder(String subscription, BatchedMessageReceiver batchedReceiver) {
+    return new Builder(subscription, batchedReceiver);
   }
 
   /** Returns the delivery attempt count for a received {@link PubsubMessage} */
@@ -327,22 +352,41 @@ public class Subscriber extends AbstractApiService implements SubscriberInterfac
           backgroundResources.add(new ExecutorAsBackgroundResource((executor)));
         }
 
-        streamingSubscriberConnections.add(
-            new StreamingSubscriberConnection(
-                subscriptionName,
-                receiver,
-                ACK_EXPIRATION_PADDING,
-                maxAckExtensionPeriod,
-                maxDurationPerAckExtension,
-                ackLatencyDistribution,
-                subStub,
-                i,
-                flowControlSettings,
-                useLegacyFlowControl,
-                flowController,
-                executor,
-                alarmsExecutor,
-                clock));
+        if (batchedReceiver != null) {
+          streamingSubscriberConnections.add(
+              new StreamingSubscriberConnection(
+                  subscriptionName,
+                  batchedReceiver,
+                  ACK_EXPIRATION_PADDING,
+                  maxAckExtensionPeriod,
+                  maxDurationPerAckExtension,
+                  ackLatencyDistribution,
+                  subStub,
+                  i,
+                  flowControlSettings,
+                  useLegacyFlowControl,
+                  flowController,
+                  executor,
+                  alarmsExecutor,
+                  clock));
+        } else {
+          streamingSubscriberConnections.add(
+              new StreamingSubscriberConnection(
+                  subscriptionName,
+                  receiver,
+                  ACK_EXPIRATION_PADDING,
+                  maxAckExtensionPeriod,
+                  maxDurationPerAckExtension,
+                  ackLatencyDistribution,
+                  subStub,
+                  i,
+                  flowControlSettings,
+                  useLegacyFlowControl,
+                  flowController,
+                  executor,
+                  alarmsExecutor,
+                  clock));
+        }
       }
       startConnections(
           streamingSubscriberConnections,
@@ -419,6 +463,7 @@ public class Subscriber extends AbstractApiService implements SubscriberInterfac
 
     private String subscriptionName;
     private MessageReceiver receiver;
+    private BatchedMessageReceiver batchedReceiver;
 
     private Duration maxAckExtensionPeriod = DEFAULT_MAX_ACK_EXTENSION_PERIOD;
     private Duration maxDurationPerAckExtension = Duration.ofMillis(0);
@@ -447,6 +492,11 @@ public class Subscriber extends AbstractApiService implements SubscriberInterfac
     Builder(String subscriptionName, MessageReceiver receiver) {
       this.subscriptionName = subscriptionName;
       this.receiver = receiver;
+    }
+
+    Builder(String subscriptionName, BatchedMessageReceiver batchedReceiver) {
+      this.subscriptionName = subscriptionName;
+      this.batchedReceiver = batchedReceiver;
     }
 
     /**

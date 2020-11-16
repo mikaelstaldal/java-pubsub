@@ -124,6 +124,41 @@ final class StreamingSubscriberConnection extends AbstractApiService implements 
     this.useLegacyFlowControl = useLegacyFlowControl;
   }
 
+  public StreamingSubscriberConnection(
+      String subscription,
+      BatchedMessageReceiver batchedReceiver,
+      Duration ackExpirationPadding,
+      Duration maxAckExtensionPeriod,
+      Duration maxDurationPerAckExtension,
+      Distribution ackLatencyDistribution,
+      SubscriberStub stub,
+      int channelAffinity,
+      FlowControlSettings flowControlSettings,
+      boolean useLegacyFlowControl,
+      FlowController flowController,
+      ScheduledExecutorService executor,
+      ScheduledExecutorService systemExecutor,
+      ApiClock clock) {
+    this.subscription = subscription;
+    this.systemExecutor = systemExecutor;
+    this.stub = stub;
+    this.channelAffinity = channelAffinity;
+    this.messageDispatcher =
+        new BatchedMessageDispatcher(
+            batchedReceiver,
+            this,
+            ackExpirationPadding,
+            maxAckExtensionPeriod,
+            maxDurationPerAckExtension,
+            ackLatencyDistribution,
+            flowController,
+            executor,
+            systemExecutor,
+            clock);
+    this.flowControlSettings = flowControlSettings;
+    this.useLegacyFlowControl = useLegacyFlowControl;
+  }
+
   @Override
   protected void doStart() {
     logger.config("Starting subscriber.");

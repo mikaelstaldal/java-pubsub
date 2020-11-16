@@ -19,10 +19,12 @@ package com.google.cloud.pubsub.it;
 import static com.google.common.truth.Truth.assertThat;
 import static org.junit.Assume.assumeTrue;
 
+import com.google.api.core.ApiFuture;
 import com.google.api.gax.rpc.PermissionDeniedException;
 import com.google.auto.value.AutoValue;
 import com.google.cloud.ServiceOptions;
 import com.google.cloud.pubsub.v1.AckReplyConsumer;
+import com.google.cloud.pubsub.v1.BatchedMessageReceiver;
 import com.google.cloud.pubsub.v1.MessageReceiver;
 import com.google.cloud.pubsub.v1.Publisher;
 import com.google.cloud.pubsub.v1.Subscriber;
@@ -232,6 +234,69 @@ public class ITPubSubTest {
     MessageAndConsumer redelivered = pollQueue(receiveQueue);
     assertThat(redelivered.message().getData()).isEqualTo(toNack.message().getData());
     redelivered.consumer().ack();
+
+    subscriber.stopAsync().awaitTerminated();
+    subscriptionAdminClient.deleteSubscription(subscriptionName);
+    topicAdminClient.deleteTopic(topicName);
+  }
+
+  @Test
+  public void testPublishBatchSubscribe() throws Exception {
+    TopicName topicName =
+        TopicName.newBuilder()
+            .setProject(projectId)
+            .setTopic(formatForTest("testing-publish-batch-subscribe-topic"))
+            .build();
+    ProjectSubscriptionName subscriptionName =
+        ProjectSubscriptionName.of(
+            projectId, formatForTest("testing-publish-batch-subscribe-subscription"));
+
+    topicAdminClient.createTopic(topicName);
+
+    subscriptionAdminClient.createSubscription(
+        getSubscription(subscriptionName, topicName, PushConfig.newBuilder().build(), 10));
+
+    final BlockingQueue<Object> receiveQueue = new LinkedBlockingQueue<>();
+    Subscriber subscriber =
+        Subscriber.newBuilder(
+                subscriptionName,
+                new BatchedMessageReceiver() {
+                  @Override
+                  public void receiveMessages(
+                      final List<PubsubMessage> messages, final AckReplyConsumer consumer) {
+                    for (PubsubMessage message : messages) {
+                      receiveQueue.offer(message);
+                    }
+                    consumer.ack();
+                  }
+                })
+            .build();
+    subscriber.addListener(
+        new Subscriber.Listener() {
+          public void failed(Subscriber.State from, Throwable failure) {
+            receiveQueue.offer(failure);
+          }
+        },
+        MoreExecutors.directExecutor());
+    subscriber.startAsync();
+
+    Publisher publisher = Publisher.newBuilder(topicName).build();
+    ApiFuture<String> future1 =
+        publisher.publish(
+            PubsubMessage.newBuilder().setData(ByteString.copyFromUtf8("msg1")).build());
+    ApiFuture<String> future2 =
+        publisher.publish(
+            PubsubMessage.newBuilder().setData(ByteString.copyFromUtf8("msg2")).build());
+    future1.get();
+    future2.get();
+    publisher.shutdown();
+    publisher.awaitTermination(1, TimeUnit.MINUTES);
+
+    Object msg1 = receiveQueue.poll(10, TimeUnit.MINUTES);
+    assertThat(msg1 instanceof PubsubMessage);
+
+    Object msg2 = receiveQueue.poll(10, TimeUnit.MINUTES);
+    assertThat(msg2 instanceof PubsubMessage);
 
     subscriber.stopAsync().awaitTerminated();
     subscriptionAdminClient.deleteSubscription(subscriptionName);

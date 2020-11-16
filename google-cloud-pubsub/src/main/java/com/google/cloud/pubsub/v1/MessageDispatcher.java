@@ -116,7 +116,10 @@ abstract class MessageDispatcher {
     NACK
   }
 
-  /** Handles callbacks for acking/nacking messages from the {@link MessageReceiver}. */
+  /**
+   * Handles callbacks for acking/nacking messages from the {@link MessageReceiver} or {@link
+   * BatchedMessageReceiver}.
+   */
   class AckHandler implements ApiFutureCallback<AckReply> {
     private final String ackId;
     private final int outstandingBytes;

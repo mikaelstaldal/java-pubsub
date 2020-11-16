@@ -38,7 +38,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.threeten.bp.Duration;
 
-public class MessageDispatcherTest {
+public class SingleMessageDispatcherTest {
   private static final ByteString MESSAGE_DATA = ByteString.copyFromUtf8("message-data");
   private static final int DELIVERY_INFO_COUNT = 3;
   private static final ReceivedMessage TEST_MESSAGE =
@@ -71,7 +71,7 @@ public class MessageDispatcherTest {
     abstract int seconds();
 
     static ModAckItem of(String ackId, int seconds) {
-      return new AutoValue_MessageDispatcherTest_ModAckItem(ackId, seconds);
+      return new AutoValue_SingleMessageDispatcherTest_ModAckItem(ackId, seconds);
     }
   }
 
@@ -124,7 +124,7 @@ public class MessageDispatcherTest {
                 .build());
 
     dispatcher =
-        new MessageDispatcher(
+        new SingleMessageDispatcher(
             receiver,
             processor,
             Duration.ofSeconds(5),

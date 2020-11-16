@@ -109,7 +109,7 @@ final class StreamingSubscriberConnection extends AbstractApiService implements 
     this.stub = stub;
     this.channelAffinity = channelAffinity;
     this.messageDispatcher =
-        new MessageDispatcher(
+        new SingleMessageDispatcher(
             receiver,
             this,
             ackExpirationPadding,

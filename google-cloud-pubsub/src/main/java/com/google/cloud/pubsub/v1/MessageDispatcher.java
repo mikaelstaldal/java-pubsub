@@ -18,14 +18,10 @@ package com.google.cloud.pubsub.v1;
 
 import com.google.api.core.ApiClock;
 import com.google.api.core.ApiFutureCallback;
-import com.google.api.core.ApiFutures;
 import com.google.api.core.InternalApi;
-import com.google.api.core.SettableApiFuture;
 import com.google.api.gax.batching.FlowController;
-import com.google.api.gax.batching.FlowController.FlowControlException;
 import com.google.api.gax.core.Distribution;
 import com.google.common.primitives.Ints;
-import com.google.common.util.concurrent.MoreExecutors;
 import com.google.pubsub.v1.PubsubMessage;
 import com.google.pubsub.v1.ReceivedMessage;
 import java.util.ArrayList;
@@ -55,25 +51,24 @@ import org.threeten.bp.temporal.ChronoUnit;
  * Dispatches messages to a message receiver while handling the messages acking and lease
  * extensions.
  */
-class MessageDispatcher {
+abstract class MessageDispatcher {
   private static final Logger logger = Logger.getLogger(MessageDispatcher.class.getName());
   private static final double PERCENTILE_FOR_ACK_DEADLINE_UPDATES = 99.9;
 
   @InternalApi static final Duration PENDING_ACKS_SEND_DELAY = Duration.ofMillis(100);
 
-  private final Executor executor;
-  private final SequentialExecutorService.AutoExecutor sequentialExecutor;
+  final Executor executor;
+  final SequentialExecutorService.AutoExecutor sequentialExecutor;
   private final ScheduledExecutorService systemExecutor;
   private final ApiClock clock;
 
   private final Duration ackExpirationPadding;
   private final Duration maxAckExtensionPeriod;
   private final int maxSecondsPerAckExtension;
-  private final MessageReceiver receiver;
   private final AckProcessor ackProcessor;
 
-  private final FlowController flowController;
-  private final Waiter messagesWaiter;
+  final FlowController flowController;
+  final Waiter messagesWaiter;
 
   // Maps ID to "total expiration time". If it takes longer than this, stop extending.
   private final ConcurrentMap<String, AckHandler> pendingMessages = new ConcurrentHashMap<>();
@@ -84,7 +79,7 @@ class MessageDispatcher {
 
   // The deadline should be set before use. Here, set it to something unreasonable,
   // so we fail loudly if we mess up.
-  private final AtomicInteger messageDeadlineSeconds = new AtomicInteger(60);
+  final AtomicInteger messageDeadlineSeconds = new AtomicInteger(60);
   private final AtomicBoolean extendDeadline = new AtomicBoolean(true);
   private final Lock jobLock;
   private ScheduledFuture<?> backgroundJob;
@@ -122,11 +117,11 @@ class MessageDispatcher {
   }
 
   /** Handles callbacks for acking/nacking messages from the {@link MessageReceiver}. */
-  private class AckHandler implements ApiFutureCallback<AckReply> {
+  class AckHandler implements ApiFutureCallback<AckReply> {
     private final String ackId;
     private final int outstandingBytes;
     private final long receivedTimeMillis;
-    private final Instant totalExpiration;
+    final Instant totalExpiration;
 
     private AckHandler(String ackId, int outstandingBytes, Instant totalExpiration) {
       this.ackId = ackId;
@@ -136,7 +131,7 @@ class MessageDispatcher {
     }
 
     /** Stop extending deadlines for this message and free flow control. */
-    private void forget() {
+    void forget() {
       if (pendingMessages.remove(ackId) == null) {
         /*
          * We're forgetting the message for the second time. Probably because we ran out of total
@@ -187,7 +182,6 @@ class MessageDispatcher {
   }
 
   MessageDispatcher(
-      MessageReceiver receiver,
       AckProcessor ackProcessor,
       Duration ackExpirationPadding,
       Duration maxAckExtensionPeriod,
@@ -202,7 +196,6 @@ class MessageDispatcher {
     this.ackExpirationPadding = ackExpirationPadding;
     this.maxAckExtensionPeriod = maxAckExtensionPeriod;
     this.maxSecondsPerAckExtension = Math.toIntExact(maxDurationPerAckExtension.getSeconds());
-    this.receiver = receiver;
     this.ackProcessor = ackProcessor;
     this.flowController = flowController;
     // 601 buckets of 1s resolution from 0s to MAX_ACK_DEADLINE_SECONDS
@@ -298,9 +291,9 @@ class MessageDispatcher {
     return messageDeadlineSeconds.get();
   }
 
-  private static class OutstandingMessage {
-    private final ReceivedMessage receivedMessage;
-    private final AckHandler ackHandler;
+  static class OutstandingMessage {
+    final ReceivedMessage receivedMessage;
+    final AckHandler ackHandler;
 
     private OutstandingMessage(ReceivedMessage receivedMessage, AckHandler ackHandler) {
       this.receivedMessage = receivedMessage;
@@ -333,22 +326,9 @@ class MessageDispatcher {
     processBatch(outstandingBatch);
   }
 
-  private void processBatch(List<OutstandingMessage> batch) {
-    messagesWaiter.incrementPendingCount(batch.size());
-    for (OutstandingMessage message : batch) {
-      // This is a blocking flow controller.  We have already incremented messagesWaiter, so
-      // shutdown will block on processing of all these messages anyway.
-      try {
-        flowController.reserve(1, message.receivedMessage.getMessage().getSerializedSize());
-      } catch (FlowControlException unexpectedException) {
-        // This should be a blocking flow controller and never throw an exception.
-        throw new IllegalStateException("Flow control unexpected exception", unexpectedException);
-      }
-      processOutstandingMessage(addDeliveryInfoCount(message.receivedMessage), message.ackHandler);
-    }
-  }
+  abstract void processBatch(List<OutstandingMessage> batch);
 
-  private PubsubMessage addDeliveryInfoCount(ReceivedMessage receivedMessage) {
+  PubsubMessage addDeliveryInfoCount(ReceivedMessage receivedMessage) {
     PubsubMessage originalMessage = receivedMessage.getMessage();
     int deliveryAttempt = receivedMessage.getDeliveryAttempt();
     // Delivery Attempt will be set to 0 if DeadLetterPolicy is not set on the subscription. In
@@ -359,50 +339,6 @@ class MessageDispatcher {
           .build();
     }
     return originalMessage;
-  }
-
-  private void processOutstandingMessage(final PubsubMessage message, final AckHandler ackHandler) {
-    final SettableApiFuture<AckReply> response = SettableApiFuture.create();
-    final AckReplyConsumer consumer =
-        new AckReplyConsumer() {
-          @Override
-          public void ack() {
-            response.set(AckReply.ACK);
-          }
-
-          @Override
-          public void nack() {
-            response.set(AckReply.NACK);
-          }
-        };
-    ApiFutures.addCallback(response, ackHandler, MoreExecutors.directExecutor());
-    Runnable deliverMessageTask =
-        new Runnable() {
-          @Override
-          public void run() {
-            try {
-              if (ackHandler
-                  .totalExpiration
-                  .plusSeconds(messageDeadlineSeconds.get())
-                  .isBefore(now())) {
-                // Message expired while waiting. We don't extend these messages anymore,
-                // so it was probably sent to someone else. Don't work on it.
-                // Don't nack it either, because we'd be nacking someone else's message.
-                ackHandler.forget();
-                return;
-              }
-
-              receiver.receiveMessage(message, consumer);
-            } catch (Exception e) {
-              response.setException(e);
-            }
-          }
-        };
-    if (message.getOrderingKey().isEmpty()) {
-      executor.execute(deliverMessageTask);
-    } else {
-      sequentialExecutor.submit(message.getOrderingKey(), deliverMessageTask);
-    }
   }
 
   /** Compute the ideal deadline, set subsequent modacks to this deadline, and return it. */
@@ -480,7 +416,7 @@ class MessageDispatcher {
     ackProcessor.sendAckOperations(acksToSend, modifyAckDeadlinesToSend);
   }
 
-  private Instant now() {
+  Instant now() {
     return Instant.ofEpochMilli(clock.millisTime());
   }
 }
